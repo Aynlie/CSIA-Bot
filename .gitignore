@@ -1,2 +1,4 @@
-
 .env
+attendance.json
+__pycache__/
+*.pyc
