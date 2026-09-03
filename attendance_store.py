@@ -12,34 +12,47 @@ from datetime import datetime, timezone
 DATA_FILE = os.path.join(os.path.dirname(__file__), "attendance.json")
 
 
-def _load():
-    if not os.path.exists(DATA_FILE):
+def _load() -> dict:
+    if not os.path.exists(DATA_FILE) or os.path.getsize(DATA_FILE) == 0:
         return {}
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
 
 
-def _save(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+def _save(data: dict) -> None:
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
 
 
-def record_attendance(user_id: int, event_name: str) -> int:
+def record_attendance(user_id: int, event_name: str) -> tuple[int, bool]:
     """
     Records that user_id attended event_name.
-    Returns the member's new total event count.
+    Returns a tuple of (new_event_count, is_new_record).
+    If the event was already recorded for this user, returns (current_count, False).
     """
+    clean_event = event_name.strip().strip("\"'")
     data = _load()
     uid = str(user_id)
     if uid not in data:
         data[uid] = {"events": []}
 
+    # Check for existing attendance for the same event name (case-insensitive)
+    already_attended = any(
+        e.get("event", "").strip().lower() == clean_event.lower()
+        for e in data[uid]["events"]
+    )
+    if already_attended:
+        return len(data[uid]["events"]), False
+
     data[uid]["events"].append({
-        "event": event_name,
+        "event": clean_event,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
     _save(data)
-    return len(data[uid]["events"])
+    return len(data[uid]["events"]), True
 
 
 def get_attendance_count(user_id: int) -> int:
@@ -50,7 +63,7 @@ def get_attendance_count(user_id: int) -> int:
     return len(data[uid]["events"])
 
 
-def get_event_history(user_id: int):
+def get_event_history(user_id: int) -> list[dict]:
     data = _load()
     uid = str(user_id)
     if uid not in data:
