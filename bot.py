@@ -31,7 +31,7 @@ import welcome_events
 import registration_store
 
 load_dotenv()
-TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+TOKEN = os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_TOKEN")
 
 intents = discord.Intents.default()
 intents.members = True
@@ -44,13 +44,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 def is_officer(member: discord.Member) -> bool:
     member_role_ids = {r.id for r in member.roles}
     return any(rid in member_role_ids for rid in config.OFFICER_ROLE_IDS if rid)
-
-
-def is_member(member: discord.Member) -> bool:
-    if not config.MEMBER_ROLE_ID:
-        return True  # if not configured, don't block anyone
-    member_role_ids = {r.id for r in member.roles}
-    return config.MEMBER_ROLE_ID in member_role_ids
 
 
 @bot.event
@@ -147,7 +140,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         return
 
     role = guild.get_role(role_id)
-    if role:
+    member = guild.get_member(payload.user_id)
+    if role and member:
         await member.add_roles(role, reason="CSIA reaction role")
 
 
@@ -162,9 +156,23 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
         return
 
     role = guild.get_role(role_id)
+    if not role:
+        return
+
     member = guild.get_member(payload.user_id)
-    if role and member:
-        await member.remove_roles(role, reason="CSIA reaction role removed")
+    if member is None:
+        try:
+            member = await guild.fetch_member(payload.user_id)
+        except (discord.NotFound, discord.HTTPException):
+            return
+
+    if member:
+        try:
+            await member.remove_roles(role, reason="CSIA reaction role removed")
+        except discord.Forbidden:
+            print(f"Cannot remove role '{role.name}': Missing permissions or role is higher than bot's role.")
+        except discord.HTTPException as e:
+            print(f"Failed to remove role '{role.name}': {e}")
 
 
 # ─────────────────────────────────────────────────────────
@@ -279,25 +287,43 @@ async def markattendance(interaction: discord.Interaction, member: discord.Membe
         await interaction.response.send_message("Only officers can use this command.", ephemeral=True)
         return
 
-    new_count = attendance_store.record_attendance(member.id, event_name)
-    response = f"✅ Recorded: **{member.display_name}** attended **{event_name}**. Total events: {new_count}."
+    clean_event = event_name.strip().strip("\"'")
+    new_count, is_new = attendance_store.record_attendance(member.id, clean_event)
+
+    if not is_new:
+        await interaction.response.send_message(
+            f"ℹ️ **{member.display_name}** was already marked present for **{clean_event}**. Total events: {new_count}.",
+            ephemeral=True,
+        )
+        return
+
+    response = f"✅ Recorded: **{member.display_name}** attended **{clean_event}**. Total events: {new_count}."
 
     # Auto-upgrade check
     upgraded = False
     if new_count >= config.ATTENDANCE_THRESHOLD and config.ACTIVE_MEMBER_ROLE_ID:
         active_role = interaction.guild.get_role(config.ACTIVE_MEMBER_ROLE_ID)
         if active_role and active_role not in member.roles:
-            await member.add_roles(active_role, reason="Reached attendance threshold")
-            upgraded = True
+            try:
+                await member.add_roles(active_role, reason="Reached attendance threshold")
+                upgraded = True
+            except discord.Forbidden:
+                print(f"Cannot assign '{active_role.name}': Missing permissions or role is above bot's highest role.")
+                response += f"\n⚠️ *Note: Bot lacks permissions to assign the {active_role.name} role.*"
+            except discord.HTTPException as e:
+                print(f"Failed to assign role '{active_role.name}': {e}")
 
     if upgraded:
         response += f"\n🎉 {member.mention} has been upgraded to **{active_role.name}**!"
         announce_channel = bot.get_channel(config.ANNOUNCEMENTS_CHANNEL_ID)
         if announce_channel:
-            await announce_channel.send(
-                f"🎉 Congrats {member.mention} — you've been promoted to **{active_role.name}** "
-                f"for attending {new_count} CSIA events!"
-            )
+            try:
+                await announce_channel.send(
+                    f"🎉 Congrats {member.mention} — you've been promoted to **{active_role.name}** "
+                    f"for attending {new_count} CSIA events!"
+                )
+            except discord.HTTPException as e:
+                print(f"Failed to send announcement: {e}")
 
     await interaction.response.send_message(response, ephemeral=True)
 
@@ -315,15 +341,38 @@ async def myevents(interaction: discord.Interaction):
         await interaction.response.send_message("You haven't been marked present at any events yet.", ephemeral=True)
         return
 
-    lines = [f"• {e['event']}" for e in history]
-    remaining = max(0, config.ATTENDANCE_THRESHOLD - len(history))
-    text = (
-        f"**Your CSIA Attendance ({len(history)} event(s)):**\n" + "\n".join(lines)
-    )
-    if remaining > 0:
-        text += f"\n\nAttend {remaining} more event(s) to be upgraded to Active Member!"
+    lines = []
+    for e in history:
+        event_name = e.get("event", "Event")
+        ts = e.get("timestamp")
+        date_str = ""
+        if ts:
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(ts)
+                date_str = f" (<t:{int(dt.timestamp())}:d>)"
+            except Exception:
+                pass
+        lines.append(f"• **{event_name}**{date_str}")
 
-    await interaction.response.send_message(text, ephemeral=True)
+    remaining = max(0, config.ATTENDANCE_THRESHOLD - len(history))
+    header = f"**Your CSIA Attendance ({len(history)} event(s)):**\n"
+    footer = (
+        f"\n\nAttend {remaining} more event(s) to be upgraded to Active Member!"
+        if remaining > 0
+        else "\n\n🎉 You've reached the Active Member threshold!"
+    )
+
+    body = "\n".join(lines)
+    full_text = header + body + footer
+
+    # Guard against Discord's 2000-character message limit
+    if len(full_text) > 2000:
+        truncated_lines = lines[:25]
+        body = "\n".join(truncated_lines) + f"\n...and {len(lines) - 25} more"
+        full_text = header + body + footer
+
+    await interaction.response.send_message(full_text, ephemeral=True)
 
 
 
@@ -444,5 +493,8 @@ async def exportregistrations(interaction: discord.Interaction):
 
 if __name__ == "__main__":
     if not TOKEN:
-        raise RuntimeError("DISCORD_BOT_TOKEN not found. Did you create a .env file from .env.example?")
+        raise RuntimeError(
+            "DISCORD_BOT_TOKEN (or DISCORD_TOKEN) not found. "
+            "Did you create a .env file from .env.example?"
+        )
     bot.run(TOKEN)
