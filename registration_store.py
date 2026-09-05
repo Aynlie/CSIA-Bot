@@ -1,0 +1,51 @@
+"""
+registration_store.py — CSIA Cyberfox bot: welcome-channel registration data
+
+Same JSON-file pattern as attendance_store.py, so it's a drop-in that fits
+the rest of the project without introducing a new storage approach.
+"""
+
+import json
+import os
+from datetime import datetime, timezone
+
+DATA_FILE = os.path.join(os.path.dirname(__file__), "registrations.json")
+
+
+def _load():
+    if not os.path.exists(DATA_FILE):
+        return {}
+    with open(DATA_FILE, "r") as f:
+        return json.load(f)
+
+
+def _save(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def save_registration(user_id: int, full_name: str, personal_email: str,
+                       hau_email: str, is_linux_attendee: bool) -> None:
+    data = _load()
+    data[str(user_id)] = {
+        "full_name": full_name,
+        "personal_email": personal_email,
+        "hau_email": hau_email,
+        "is_linux_attendee": is_linux_attendee,
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _save(data)
+
+
+def get_registration(user_id: int):
+    """Returns the registration dict for this user, or None if not registered."""
+    return _load().get(str(user_id))
+
+
+def has_registered(user_id: int) -> bool:
+    return get_registration(user_id) is not None
+
+
+def get_all_registrations() -> dict:
+    """Officer/export use — returns the full {user_id: registration} dict."""
+    return _load()

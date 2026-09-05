@@ -1,4 +1,7 @@
 .env
+registration.json
 attendance.json
 __pycache__/
 *.pyc
+registrations.json
+attendance.json
