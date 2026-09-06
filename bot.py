@@ -29,6 +29,7 @@ import attendance_store
 import profile_card
 import welcome_events
 import registration_store
+import bot_state
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -99,6 +100,12 @@ async def on_ready():
     # across restarts (needed because RegisterView uses timeout=None + a
     # fixed custom_id).
     bot.add_view(welcome_events.RegisterView())
+
+    # Reload the verification message ID so the reaction gate keeps working
+    # after a restart — this used to live only in memory and reset to None
+    # every time the bot restarted, silently breaking verification.
+    global _verification_message_id
+    _verification_message_id = bot_state.get_verification_message_id()
 
 
 # ─────────────────────────────────────────────────────────
@@ -259,6 +266,7 @@ async def postrules(interaction: discord.Interaction):
     verification_message = await verification_channel.send(embed=verification_embed)
     await verification_message.add_reaction(config.VERIFICATION_EMOJI)
     _verification_message_id = verification_message.id
+    bot_state.set_verification_message_id(verification_message.id)
 
     await interaction.response.send_message(
         f"Rules + verification posted in {channel.mention}.", ephemeral=True
@@ -269,41 +277,7 @@ async def postrules(interaction: discord.Interaction):
 # VERIFICATION GATE
 # ─────────────────────────────────────────────────────────
 
-_verification_message_id = None  # tracked so reaction handler only fires on this message
-
-
-@bot.tree.command(
-    name="postverification",
-    description="Re-post ONLY the verification message (officers only) — /postrules already posts this automatically",
-)
-async def postverification(interaction: discord.Interaction):
-    global _verification_message_id
-
-    if not is_officer(interaction.user):
-        await interaction.response.send_message("Only officers can use this command.", ephemeral=True)
-        return
-
-    channel = bot.get_channel(config.VERIFICATION_CHANNEL_ID)
-    if channel is None:
-        await interaction.response.send_message(
-            "VERIFICATION_CHANNEL_ID isn't set correctly in config.py.", ephemeral=True
-        )
-        return
-
-    embed = discord.Embed(
-        title=config.VERIFICATION_TITLE,
-        description=config.VERIFICATION_DESCRIPTION,
-        color=discord.Color.red(),
-    )
-    embed.set_footer(text=config.EMBED_FOOTER)
-
-    message = await channel.send(embed=embed)
-    await message.add_reaction(config.VERIFICATION_EMOJI)
-    _verification_message_id = message.id
-
-    await interaction.response.send_message(
-        f"Verification message posted in {channel.mention}.", ephemeral=True
-    )
+_verification_message_id = None  # reloaded from bot_state.py in on_ready
 
 
 # ─────────────────────────────────────────────────────────
@@ -317,8 +291,15 @@ async def markattendance(interaction: discord.Interaction, member: discord.Membe
         await interaction.response.send_message("Only officers can use this command.", ephemeral=True)
         return
 
-    new_count = attendance_store.record_attendance(member.id, event_name)
-    response = f"✅ Recorded: **{member.display_name}** attended **{event_name}**. Total events: {new_count}."
+    new_count, is_new = attendance_store.record_attendance(member.id, event_name)
+
+    if not is_new:
+        response = (
+            f"⚠️ **{member.display_name}** was already marked present for "
+            f"**{event_name}**. Total events: {new_count}."
+        )
+    else:
+        response = f"✅ Recorded: **{member.display_name}** attended **{event_name}**. Total events: {new_count}."
 
     # Auto-upgrade check
     upgraded = False
@@ -434,8 +415,9 @@ async def viewregistration(interaction: discord.Interaction, member: discord.Mem
         f"Personal Email: {reg['personal_email']}\n"
         f"HAU Student Email: {reg['hau_email'] or '(not provided)'}\n"
         f"Linux Fundamentals Attendee: {'Yes' if reg['is_linux_attendee'] else 'No'}\n"
-        f"CSIA Member (opted in): {'Yes' if reg.get('wants_membership', False) else 'No'}\n"
-        f"Submitted: {reg['submitted_at']}"
+        f"Submitted: {reg['submitted_at']}\n\n"
+        f"*CSIA membership is tracked separately via the Google Form — check there, "
+        f"then assign the Member role manually if applicable.*"
     )
     await interaction.response.send_message(text, ephemeral=True)
 
@@ -451,7 +433,6 @@ async def viewregistration(interaction: discord.Interaction, member: discord.Mem
     app_commands.Choice(name="Personal Email", value="personal_email"),
     app_commands.Choice(name="HAU Student Email", value="hau_email"),
     app_commands.Choice(name="Linux Fundamentals Attendee (Yes/No)", value="is_linux_attendee"),
-    app_commands.Choice(name="CSIA Member opted in (Yes/No)", value="wants_membership"),
 ])
 async def editregistration(
     interaction: discord.Interaction,
@@ -473,7 +454,7 @@ async def editregistration(
     field_key = field.value
     clean_value: object = new_value.strip()
 
-    if field_key in ("is_linux_attendee", "wants_membership"):
+    if field_key == "is_linux_attendee":
         clean_value = new_value.strip().lower() in ("yes", "y", "yep", "yeah", "true")
     elif field_key in ("personal_email", "hau_email"):
         if clean_value and not welcome_events.is_valid_email(str(clean_value)):
@@ -487,6 +468,60 @@ async def editregistration(
     await interaction.response.send_message(
         f"Updated **{field.name}** for {member.display_name} to: `{clean_value}`", ephemeral=True
     )
+
+
+@bot.tree.command(
+    name="verifymember",
+    description="Grant or record CSIA Member status after checking the Google Form (officers only)",
+)
+@app_commands.describe(
+    member="The member being verified",
+    is_member="Does the Google Form / member database confirm they're a CSIA Member?",
+)
+@app_commands.choices(is_member=[
+    app_commands.Choice(name="Yes", value="yes"),
+    app_commands.Choice(name="No", value="no"),
+])
+async def verifymember(
+    interaction: discord.Interaction,
+    member: discord.Member,
+    is_member: app_commands.Choice[str],
+):
+    if not is_officer(interaction.user):
+        await interaction.response.send_message("Only officers can use this command.", ephemeral=True)
+        return
+
+    member_role = interaction.guild.get_role(config.MEMBER_ROLE_ID)
+    if member_role is None:
+        await interaction.response.send_message(
+            "MEMBER_ROLE_ID isn't set correctly in config.py.", ephemeral=True
+        )
+        return
+
+    if is_member.value == "no":
+        await interaction.response.send_message(
+            f"Noted — **{member.display_name}** was checked and is not confirmed as a "
+            "CSIA Member yet. No role change made.",
+            ephemeral=True,
+        )
+        return
+
+    if member_role in member.roles:
+        await interaction.response.send_message(
+            f"{member.display_name} already has the Member role.", ephemeral=True
+        )
+        return
+
+    await member.add_roles(
+        member_role, reason=f"Confirmed CSIA Member by {interaction.user.display_name} via Google Form check"
+    )
+    await interaction.response.send_message(
+        f"✅ {member.mention} has been granted the **Member** role.", ephemeral=True
+    )
+
+    announce_channel = bot.get_channel(config.ANNOUNCEMENTS_CHANNEL_ID)
+    if announce_channel:
+        await announce_channel.send(f"🎉 Welcome {member.mention} as an official CSIA Member! 🦊")
 
 
 @bot.tree.command(name="exportregistrations", description="Export all welcome-channel registrations as a CSV (restricted officers only)")
@@ -508,7 +543,7 @@ async def exportregistrations(interaction: discord.Interaction):
     writer = csv.writer(buffer)
     writer.writerow([
         "Discord User ID", "Discord Username", "Full Name", "Personal Email",
-        "HAU Student Email", "Linux Fundamentals Attendee", "CSIA Member (opted in)", "Submitted At",
+        "HAU Student Email", "Linux Fundamentals Attendee", "Submitted At",
     ])
 
     for user_id_str, reg in data.items():
@@ -521,7 +556,6 @@ async def exportregistrations(interaction: discord.Interaction):
             reg["personal_email"],
             reg["hau_email"] or "",
             "Yes" if reg["is_linux_attendee"] else "No",
-            "Yes" if reg.get("wants_membership", False) else "No",
             reg["submitted_at"],
         ])
 

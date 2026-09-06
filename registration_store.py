@@ -28,15 +28,19 @@ def _save(data: dict) -> None:
 
 
 def save_registration(user_id: int, full_name: str, personal_email: str,
-                       hau_email: str, is_linux_attendee: bool,
-                       wants_membership: bool = False) -> None:
+                       hau_email: str, is_linux_attendee: bool) -> None:
+    """
+    Membership is no longer tracked here — CSIA membership is decided by
+    officers cross-referencing the official Google Form / member database,
+    then manually granting the Member role in Discord. This form is only
+    for Verified + Linux Fundamentals Attendee status.
+    """
     data = _load()
     data[str(user_id)] = {
         "full_name": full_name,
         "personal_email": personal_email,
         "hau_email": hau_email,
         "is_linux_attendee": is_linux_attendee,
-        "wants_membership": wants_membership,
         "submitted_at": datetime.now(timezone.utc).isoformat(),
     }
     _save(data)

@@ -12,10 +12,13 @@ year — this file is the fix.
 
 - Reaction-role menus (Specialization, Pronouns, Year Level, Tools & Skills,
   What You Do, Linux Fundamentals Event) — `/postroles`
-- Rules + verification gate — `/postrules`, `/postverification`
-- Welcome-channel registration (name, email, Linux attendee / Member opt-in)
-  — `/postwelcome`, granting Verified / Member / Linux Fundamentals Attendee
-  as three **independent** roles (see Section 4)
+- Rules + verification gate — `/postrules` (posts both the rules embed and
+  the verification embed together; there is no separate command anymore —
+  see Section 4 for why)
+- Welcome-channel registration (name, email, Linux attendee opt-in)
+  — `/postwelcome`, granting Verified / Linux Fundamentals Attendee as
+  independent roles (see Section 4)
+- CSIA Membership verification — `/verifymember` (see Section 4)
 - Event attendance tracking with auto-upgrade to Active Member —
   `/markattendance`, `/myevents`
 - Profile/level card — `/profile`
@@ -72,13 +75,32 @@ single highest-priority gap flagged in the last review. To fix:
 Three roles are **intentionally independent**, not a dependency chain:
 
 - **Verified** — proved they read and agreed to the rules. Granted by
-  either reacting ✅ in #rules-and-info OR completing the registration
-  form (both call the same `grant_verified()` helper in
-  `welcome_events.py` — don't add a third place that grants this role).
-- **Member** — official CSIA member. Only granted if someone explicitly
-  opts in on the registration form.
+  either reacting ✅ on the verification message in #rules-and-info OR
+  completing the Verify & Register form (both call the same
+  `grant_verified()` helper in `welcome_events.py` — don't add a third
+  place that grants this role).
 - **Linux Fundamentals Attendee** — event-only access, independent of
-  membership. Someone can have this WITHOUT being a Member.
+  membership. Someone can have this WITHOUT being a Member. Granted by
+  the Verify & Register form when someone answers "Yes" to attending.
+- **Member** — official CSIA member. **Not granted automatically by the
+  bot's own form anymore.** The flow is now:
+  1. Someone completes the Verify & Register form in Discord (name,
+     email, Linux attendee status only — no membership question).
+  2. The bot automatically posts a notification embed of that submission
+     to the channel configured as `REGISTRATION_LOG_CHANNEL_ID`.
+  3. An officer cross-checks the submission against CSIA's official
+     membership Google Form (`config.MEMBERSHIP_FORM_URL`) or member
+     database to confirm the person actually registered as a member
+     there.
+  4. The officer runs `/verifymember @person`, answering the "Are they a
+     Member?" Yes/No prompt. **Yes** grants the Member role and posts a
+     welcome message in #announcements. **No** just logs that they were
+     checked and aren't confirmed yet — no role change, but there's a
+     record it was looked at.
+
+  This exists because CSIA's actual membership records live in the
+  Google Form / database, not in Discord — the bot's job is to flag new
+  people to check, not to decide membership on its own.
 - **Active Member** — a separate earned tier, granted automatically by
   `/markattendance` once someone hits `ATTENDANCE_THRESHOLD` (currently 3)
   events. Requires the base Member role already exists conceptually, but
@@ -86,11 +108,25 @@ Three roles are **intentionally independent**, not a dependency chain:
 
 **Do not merge these into one role** even if it seems simpler — the
 whole point is that someone attending Linux Fundamentals as a guest
-shouldn't be forced into CSIA's membership database.
+shouldn't be forced into CSIA's membership database, and someone
+verifying (agreeing to rules) shouldn't automatically become a Member
+either.
+
+### Setup this flow needs
+- `config.MEMBERSHIP_FORM_URL` — paste the real Google Form link here.
+  It's shown to people after they submit the in-Discord form, and in the
+  welcome-channel embed.
+- `config.REGISTRATION_LOG_CHANNEL_ID` — create an officer-only channel
+  (e.g. `#registration-log`), copy its ID, and paste it in. Left at `0`
+  it's a no-op (the bot just won't post there), so nothing breaks if you
+  haven't set this up yet — but officers won't see new submissions
+  either.
 
 ## 5. Personal data this bot stores
 
-`registrations.json` contains **real names and email addresses**.
+`registrations.json` contains **real names and email addresses** (no
+longer a membership flag — that decision lives in the Google Form now,
+not this file).
 
 - It is `.gitignore`d and should never be committed — verify this is
   still true (`git status` should never show this file as staged)
@@ -106,6 +142,10 @@ shouldn't be forced into CSIA's membership database.
   used for and that only Officers can see it. If CSIA's actual data
   handling ever changes, update that notice text in
   `welcome_events.py` → `build_welcome_channel_embed()`.
+- New submissions are also posted live to `REGISTRATION_LOG_CHANNEL_ID`
+  (see Section 4) — that channel will accumulate the same name/email
+  data over time as regular chat history, so it should be officer-only
+  and probably cleared out periodically, same caution as the JSON file.
 
 ## 6. Before you push any change
 

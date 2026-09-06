@@ -107,12 +107,12 @@ def test_corrupted_json_file_does_not_crash(attendance_store):
 
 def test_save_and_get_registration(registration_store):
     registration_store.save_registration(
-        222, "Test User", "test@gmail.com", "test@student.hau.edu.ph", True, False
+        222, "Test User", "test@gmail.com", "test@student.hau.edu.ph", True
     )
     reg = registration_store.get_registration(222)
     assert reg["full_name"] == "Test User"
     assert reg["is_linux_attendee"] is True
-    assert reg["wants_membership"] is False
+    assert "wants_membership" not in reg  # membership tracked externally now
 
 
 def test_has_registered_false_for_unknown_user(registration_store):
@@ -120,12 +120,12 @@ def test_has_registered_false_for_unknown_user(registration_store):
 
 
 def test_has_registered_true_after_save(registration_store):
-    registration_store.save_registration(222, "Test User", "test@gmail.com", "", False, True)
+    registration_store.save_registration(222, "Test User", "test@gmail.com", "", False)
     assert registration_store.has_registered(222) is True
 
 
 def test_update_registration_field_on_existing_user(registration_store):
-    registration_store.save_registration(222, "Test User", "old@gmail.com", "", False, False)
+    registration_store.save_registration(222, "Test User", "old@gmail.com", "", False)
     updated = registration_store.update_registration_field(222, "personal_email", "new@gmail.com")
     assert updated is True
     assert registration_store.get_registration(222)["personal_email"] == "new@gmail.com"
@@ -137,8 +137,8 @@ def test_update_registration_field_on_unknown_user_returns_false(registration_st
 
 
 def test_get_all_registrations_returns_everyone(registration_store):
-    registration_store.save_registration(1, "User One", "one@gmail.com", "", True, False)
-    registration_store.save_registration(2, "User Two", "two@gmail.com", "", False, True)
+    registration_store.save_registration(1, "User One", "one@gmail.com", "", True)
+    registration_store.save_registration(2, "User Two", "two@gmail.com", "", False)
     all_regs = registration_store.get_all_registrations()
     assert len(all_regs) == 2
     assert "1" in all_regs and "2" in all_regs

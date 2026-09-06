@@ -109,10 +109,19 @@ def build_welcome_channel_embed(guild: discord.Guild) -> discord.Embed:
         value=(
             "**Complete Step 1 (react ✅ in #rules-and-info) first** — it unlocks the button below. "
             "Then click **Verify & Register** and fill in your name, email, and whether you're "
-            "attending Linux Fundamentals or joining as a Member.\n\n"
-            "*Your name and email are collected only to confirm event attendance and "
-            "process CSIA membership, and are only visible to CSIA Officers. "
-            "Contact the Secretariat if you'd like your data corrected or removed.*"
+            "attending Linux Fundamentals.\n\n"
+            "*Your name and email are collected only to confirm event attendance, and are only "
+            "visible to CSIA Officers. Contact the Secretariat if you'd like your data corrected "
+            "or removed.*"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🦊 Want to become an official CSIA Member?",
+        value=(
+            f"Fill out our membership form: {config.MEMBERSHIP_FORM_URL}\n"
+            "Officers review submissions and assign the Member role directly — this is separate "
+            "from the Verify & Register button above."
         ),
         inline=False,
     )
@@ -144,18 +153,12 @@ class RegistrationModal(discord.ui.Modal, title="CSIA Verification & Registratio
         placeholder="Yes or No",
         max_length=10,
     )
-    become_member = discord.ui.TextInput(
-        label="Join CSIA as an official Member? (Yes/No)",
-        placeholder="Yes or No",
-        max_length=10,
-    )
 
     async def on_submit(self, interaction: discord.Interaction):
         name = self.full_name.value.strip()
         personal = self.personal_email.value.strip()
         hau = self.hau_email.value.strip()
         attendee_raw = self.linux_attendee.value.strip().lower()
-        member_raw = self.become_member.value.strip().lower()
 
         if not is_valid_email(personal):
             await interaction.response.send_message(
@@ -173,10 +176,9 @@ class RegistrationModal(discord.ui.Modal, title="CSIA Verification & Registratio
             return
 
         is_attendee = attendee_raw in ("yes", "y", "yep", "yeah")
-        wants_membership = member_raw in ("yes", "y", "yep", "yeah")
 
         registration_store.save_registration(
-            interaction.user.id, name, personal, hau, is_attendee, wants_membership
+            interaction.user.id, name, personal, hau, is_attendee
         )
 
         member = interaction.user
@@ -192,15 +194,10 @@ class RegistrationModal(discord.ui.Modal, title="CSIA Verification & Registratio
             verified_role = guild.get_role(config.VERIFIED_ROLE_ID)
             granted.append(verified_role.name)
 
-        # Member is now its own explicit opt-in — not everyone filling this
-        # form (e.g. outside guests here only for the Linux workshop) wants
-        # to join CSIA as an org.
-        if wants_membership:
-            member_role = guild.get_role(config.MEMBER_ROLE_ID)
-            if member_role and member_role not in member.roles:
-                await member.add_roles(member_role, reason="Opted in to become an official CSIA Member")
-                granted.append(member_role.name)
-
+        # Member is NOT granted here. CSIA membership is decided by officers
+        # cross-referencing the official Google Form / member database, then
+        # manually assigning the Member role in Discord — this bot form is
+        # only responsible for Verified and Linux Fundamentals Attendee.
         if is_attendee:
             attendee_role = guild.get_role(config.LINUX_FUNDAMENTALS_ATTENDEE_ROLE_ID)
             if attendee_role and attendee_role not in member.roles:
@@ -210,25 +207,47 @@ class RegistrationModal(discord.ui.Modal, title="CSIA Verification & Registratio
         announcements = guild.get_channel(config.ANNOUNCEMENTS_CHANNEL_ID)
         announcements_ref = announcements.mention if announcements else "#announcements"
 
+        # Notify officers so they can cross-check this submission against the
+        # membership Google Form / database and run /verifymember if needed —
+        # no need to manually run /viewregistration on everyone.
+        log_channel = guild.get_channel(config.REGISTRATION_LOG_CHANNEL_ID)
+        if log_channel:
+            log_embed = discord.Embed(
+                title="📋 New Registration Submitted",
+                color=CSIA_RED,
+            )
+            log_embed.add_field(name="Discord User", value=member.mention, inline=False)
+            log_embed.add_field(name="Full Name", value=name, inline=True)
+            log_embed.add_field(name="Personal Email", value=personal, inline=True)
+            log_embed.add_field(name="HAU Email", value=hau or "(not provided)", inline=True)
+            log_embed.add_field(
+                name="Linux Fundamentals Attendee",
+                value="Yes" if is_attendee else "No",
+                inline=True,
+            )
+            log_embed.set_footer(
+                text="Check the CSIA membership Google Form to confirm Member status, "
+                     "then run /verifymember."
+            )
+            await log_channel.send(embed=log_embed)
+
         confirmation = f"Thanks, {name}! You're all set."
         if granted:
             confirmation += f" Roles granted: {', '.join(granted)}."
 
-        if wants_membership:
-            confirmation += (
-                "\n\nWelcome to CSIA, official Member! 🦊 A few commands to get you started:\n"
-                "• `/profile` — view your CSIA profile card (specialization, level, events attended)\n"
-                "• `/myevents` — check your own event attendance history\n"
-                f"• Keep an eye on {announcements_ref} for upcoming events, workshops, and CTFs"
-            )
-        elif is_attendee:
+        if is_attendee:
             confirmation += (
                 "\n\nThanks for registering for Linux Fundamentals! 🐧 You now have access to the "
-                "event channels. If you'd like to join CSIA as a Member later, just click "
-                "**Verify & Register** again — contact an officer to update your answer."
+                "event channels."
             )
         else:
             confirmation += " Thanks for verifying! Feel free to look around."
+
+        confirmation += (
+            f"\n\nWant to become an official CSIA Member? Fill out our membership form: "
+            f"{config.MEMBERSHIP_FORM_URL}\nOfficers review submissions and assign the "
+            "Member role directly — no extra step needed here."
+        )
 
         await interaction.response.send_message(confirmation, ephemeral=True)
 
