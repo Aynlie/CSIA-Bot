@@ -12,16 +12,19 @@ from datetime import datetime, timezone
 DATA_FILE = os.path.join(os.path.dirname(__file__), "registrations.json")
 
 
-def _load():
-    if not os.path.exists(DATA_FILE):
+def _load() -> dict:
+    if not os.path.exists(DATA_FILE) or os.path.getsize(DATA_FILE) == 0:
         return {}
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
 
 
-def _save(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+def _save(data: dict) -> None:
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
 
 
 def save_registration(user_id: int, full_name: str, personal_email: str,

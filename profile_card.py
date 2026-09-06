@@ -15,6 +15,7 @@ to update here.
 """
 
 import io
+import os
 import discord
 from PIL import Image, ImageDraw, ImageFont
 import aiohttp
@@ -27,22 +28,29 @@ import attendance_store
 CARD_WIDTH = 900
 CARD_HEIGHT = 300
 
-BG_COLOR = (20, 20, 24)        # near-black, matches CSIA dark theme
+BG_COLOR = (18, 18, 22)        # sleek dark surface
 ACCENT_COLOR = (163, 23, 18)   # CSIA red (#A31712)
-TEXT_COLOR = (235, 235, 235)
-SUBTEXT_COLOR = (170, 170, 170)
-BAR_BG_COLOR = (45, 45, 50)
-
-# Optional: drop real .ttf files here for nicer typography.
-# Falls back to Pillow's default bitmap font if missing — won't crash.
-FONT_BOLD_PATH = "./assets/fonts/Inter-Bold.ttf"
-FONT_REGULAR_PATH = "./assets/fonts/Inter-Regular.ttf"
+TEXT_COLOR = (245, 245, 245)
+SUBTEXT_COLOR = (165, 165, 175)
+BAR_BG_COLOR = (38, 38, 44)
 
 
-def _load_font(path: str, size: int):
+FONTS_DIR = os.path.join(os.path.dirname(__file__), "assets", "fonts")
+FONT_BOLD_PATH = os.path.join(FONTS_DIR, "Inter-Bold.ttf")
+FONT_REGULAR_PATH = os.path.join(FONTS_DIR, "Inter-Regular.ttf")
+
+
+def _load_font(size: int, bold: bool = False):
+    bundled_path = FONT_BOLD_PATH if bold else FONT_REGULAR_PATH
+    if os.path.exists(bundled_path):
+        try:
+            return ImageFont.truetype(bundled_path, size)
+        except OSError:
+            pass
+
     try:
-        return ImageFont.truetype(path, size)
-    except OSError:
+        return ImageFont.load_default(size=size)
+    except TypeError:
         return ImageFont.load_default()
 
 
@@ -88,7 +96,7 @@ def get_specialization(member: discord.Member) -> tuple[str, tuple[int, int, int
         if style:
             label, hex_color = style
             return label, _hex_to_rgb(hex_color)
-    return "Unspecialized", (100, 100, 100)
+    return "Unspecialized", (200, 45, 40)
 
 
 async def _fetch_avatar_bytes(member: discord.Member) -> bytes:
@@ -117,39 +125,49 @@ async def build_profile_card(member: discord.Member) -> discord.File:
     card = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), BG_COLOR)
     draw = ImageDraw.Draw(card)
 
-    draw.rectangle([(0, 0), (14, CARD_HEIGHT)], fill=ACCENT_COLOR)
+    # Left CSIA red accent stripe
+    draw.rectangle([(0, 0), (12, CARD_HEIGHT)], fill=ACCENT_COLOR)
 
+    # Circular avatar with colored specialization outline
     avatar_bytes = await _fetch_avatar_bytes(member)
     avatar_img = _circular_avatar(avatar_bytes, size=200)
     card.paste(avatar_img, (50, 50), avatar_img)
-    draw.ellipse((46, 46, 250, 250), outline=spec_color, width=6)
+    draw.ellipse((46, 46, 250, 250), outline=spec_color, width=5)
 
-    font_name = _load_font(FONT_BOLD_PATH, 40)
-    font_sub = _load_font(FONT_REGULAR_PATH, 24)
-    font_label = _load_font(FONT_REGULAR_PATH, 20)
+    # Scalable typography
+    font_name = _load_font(36, bold=True)
+    font_sub = _load_font(21, bold=False)
+    font_label = _load_font(18, bold=False)
+    font_stat = _load_font(15, bold=False)
 
-    draw.text((280, 55), member.display_name, font=font_name, fill=TEXT_COLOR)
-    draw.text((280, 110), f"Specialization: {spec_label}", font=font_sub, fill=spec_color)
-    draw.text((280, 150), f"Level: {level_label}", font=font_sub, fill=TEXT_COLOR)
-    draw.text((280, 185), f"Events attended: {event_count}", font=font_label, fill=SUBTEXT_COLOR)
+    display_name = member.display_name
+    draw.text((280, 48), display_name, font=font_name, fill=TEXT_COLOR)
+    draw.text((280, 100), f"Specialization: {spec_label}", font=font_sub, fill=spec_color)
+    draw.text((280, 134), f"Level: {level_label}", font=font_sub, fill=TEXT_COLOR)
+    draw.text((280, 168), f"Events attended: {event_count}", font=font_label, fill=SUBTEXT_COLOR)
 
-    bar_x, bar_y, bar_w, bar_h = 280, 230, 550, 26
-    draw.rounded_rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + bar_h], radius=13, fill=BAR_BG_COLOR)
+    # Progress bar
+    bar_x, bar_y, bar_w, bar_h = 280, 208, 560, 24
+    draw.rounded_rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + bar_h], radius=12, fill=BAR_BG_COLOR)
 
     if next_floor is not None:
         span = next_floor - tier_floor
         progress = min(1.0, (event_count - tier_floor) / span) if span > 0 else 1.0
         fill_w = int(bar_w * progress)
         if fill_w > 0:
-            draw.rounded_rectangle([bar_x, bar_y, bar_x + fill_w, bar_y + bar_h], radius=13, fill=spec_color)
+            draw.rounded_rectangle([bar_x, bar_y, bar_x + fill_w, bar_y + bar_h], radius=12, fill=spec_color)
         draw.text(
-            (bar_x, bar_y + bar_h + 6),
+            (bar_x, bar_y + bar_h + 8),
             f"{event_count}/{next_floor} events to next level",
-            font=font_label, fill=SUBTEXT_COLOR,
+            font=font_stat, fill=SUBTEXT_COLOR,
         )
     else:
-        draw.rounded_rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + bar_h], radius=13, fill=spec_color)
-        draw.text((bar_x, bar_y + bar_h + 6), "Max level reached", font=font_label, fill=SUBTEXT_COLOR)
+        draw.rounded_rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + bar_h], radius=12, fill=spec_color)
+        draw.text(
+            (bar_x, bar_y + bar_h + 8),
+            f"Max level reached ({level_label})",
+            font=font_stat, fill=(225, 185, 75),
+        )
 
     buffer = io.BytesIO()
     card.save(buffer, format="PNG")
