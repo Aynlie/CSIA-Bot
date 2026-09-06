@@ -205,6 +205,12 @@ EMBED_FOOTER = "CSIA — Cybersecurity Intelligence Alliance | Same Mission, Str
 ARRIVALS_CHANNEL_ID = 1541801118949056673  # TODO: fill in #arrivals channel ID
 WELCOME_CHANNEL_ID = 1541801587889016894   # TODO: fill in #welcome-to-csia channel ID
 
+# Officer-only channel where a notification is posted every time someone
+# submits the Verify & Register form — lets officers spot new submissions
+# and cross-check them against the membership Google Form without having
+# to run /viewregistration on everyone manually.
+REGISTRATION_LOG_CHANNEL_ID = 1544657009193000970 # TODO: fill in your officer-only log channel ID
+
 # ── Specialization roles, for the /profile card ─────────
 # Reuses the same role IDs already wired into ROLE_MENUS above
 # (Specialization menu) — maps role ID -> (display label, hex accent color).
@@ -214,6 +220,12 @@ SPECIALIZATION_ROLE_STYLES = {
     1544915250523021412: ("Purple Team", "#9646BE"),  # Purple Team
     1544912052143788113: ("GRC", "#C8A03C"),          # GRC
 }
+
+# ── Membership (handled externally) ─────────────────────
+# CSIA membership is no longer auto-granted by the bot's registration form.
+# Officers check submissions against this Google Form / the member database
+# and manually assign MEMBER_ROLE_ID in Discord.
+MEMBERSHIP_FORM_URL = "https://forms.gle/REPLACE_WITH_REAL_LINK"  # TODO: paste real form link
 
 # ── Registration (welcome-channel verify & register button) ─────
 # Same role ID already used for the 🎫 reaction in ROLE_MENUS above —
