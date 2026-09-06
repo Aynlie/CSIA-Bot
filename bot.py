@@ -31,7 +31,7 @@ import welcome_events
 import registration_store
 
 load_dotenv()
-TOKEN = os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_TOKEN")
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 
 intents = discord.Intents.default()
 intents.members = True
@@ -44,6 +44,25 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 def is_officer(member: discord.Member) -> bool:
     member_role_ids = {r.id for r in member.roles}
     return any(rid in member_role_ids for rid in config.OFFICER_ROLE_IDS if rid)
+
+
+def is_exporter(member: discord.Member) -> bool:
+    """
+    Stricter than is_officer() — controls who can run /exportregistrations,
+    since that command produces a downloadable file with real names and
+    personal emails. Falls back to the officer list if EXPORT_ROLE_IDS is
+    left empty in config.py.
+    """
+    role_ids = config.EXPORT_ROLE_IDS or config.OFFICER_ROLE_IDS
+    member_role_ids = {r.id for r in member.roles}
+    return any(rid in member_role_ids for rid in role_ids if rid)
+
+
+def is_member(member: discord.Member) -> bool:
+    if not config.MEMBER_ROLE_ID:
+        return True  # if not configured, don't block anyone
+    member_role_ids = {r.id for r in member.roles}
+    return config.MEMBER_ROLE_ID in member_role_ids
 
 
 @bot.event
@@ -129,9 +148,22 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
     # Verification gate — separate, single-emoji reaction on its own tracked message
     if payload.message_id == _verification_message_id and str(payload.emoji) == config.VERIFICATION_EMOJI:
-        role = guild.get_role(config.VERIFIED_ROLE_ID)
-        if role and role not in member.roles:
-            await member.add_roles(role, reason="Verified — agreed to server rules")
+        just_verified = await welcome_events.grant_verified(guild, member)
+
+        # Rules agreement is step 1 of 2 — direct them to the registration form
+        # next, since completing THAT is what actually grants Member status.
+        if just_verified:
+            welcome_channel = guild.get_channel(config.WELCOME_CHANNEL_ID)
+            channel_ref = welcome_channel.mention if welcome_channel else "#welcome-to-csia"
+            try:
+                await member.send(
+                    "✅ Thanks for agreeing to the CSIA rules!\n\n"
+                    f"One more step — head to {channel_ref} and click **Verify & Register** "
+                    "to complete your registration. That's what unlocks your full Member "
+                    "status and access."
+                )
+            except discord.Forbidden:
+                pass  # member has DMs disabled — nothing more we can do here
         return
 
     # Role-menu reactions (Specialization, Pronouns, Year Level, etc.)
@@ -140,8 +172,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         return
 
     role = guild.get_role(role_id)
-    member = guild.get_member(payload.user_id)
-    if role and member:
+    if role:
         await member.add_roles(role, reason="CSIA reaction role")
 
 
@@ -156,23 +187,9 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
         return
 
     role = guild.get_role(role_id)
-    if not role:
-        return
-
     member = guild.get_member(payload.user_id)
-    if member is None:
-        try:
-            member = await guild.fetch_member(payload.user_id)
-        except (discord.NotFound, discord.HTTPException):
-            return
-
-    if member:
-        try:
-            await member.remove_roles(role, reason="CSIA reaction role removed")
-        except discord.Forbidden:
-            print(f"Cannot remove role '{role.name}': Missing permissions or role is higher than bot's role.")
-        except discord.HTTPException as e:
-            print(f"Failed to remove role '{role.name}': {e}")
+    if role and member:
+        await member.remove_roles(role, reason="CSIA reaction role removed")
 
 
 # ─────────────────────────────────────────────────────────
@@ -287,43 +304,25 @@ async def markattendance(interaction: discord.Interaction, member: discord.Membe
         await interaction.response.send_message("Only officers can use this command.", ephemeral=True)
         return
 
-    clean_event = event_name.strip().strip("\"'")
-    new_count, is_new = attendance_store.record_attendance(member.id, clean_event)
-
-    if not is_new:
-        await interaction.response.send_message(
-            f"ℹ️ **{member.display_name}** was already marked present for **{clean_event}**. Total events: {new_count}.",
-            ephemeral=True,
-        )
-        return
-
-    response = f"✅ Recorded: **{member.display_name}** attended **{clean_event}**. Total events: {new_count}."
+    new_count = attendance_store.record_attendance(member.id, event_name)
+    response = f"✅ Recorded: **{member.display_name}** attended **{event_name}**. Total events: {new_count}."
 
     # Auto-upgrade check
     upgraded = False
     if new_count >= config.ATTENDANCE_THRESHOLD and config.ACTIVE_MEMBER_ROLE_ID:
         active_role = interaction.guild.get_role(config.ACTIVE_MEMBER_ROLE_ID)
         if active_role and active_role not in member.roles:
-            try:
-                await member.add_roles(active_role, reason="Reached attendance threshold")
-                upgraded = True
-            except discord.Forbidden:
-                print(f"Cannot assign '{active_role.name}': Missing permissions or role is above bot's highest role.")
-                response += f"\n⚠️ *Note: Bot lacks permissions to assign the {active_role.name} role.*"
-            except discord.HTTPException as e:
-                print(f"Failed to assign role '{active_role.name}': {e}")
+            await member.add_roles(active_role, reason="Reached attendance threshold")
+            upgraded = True
 
     if upgraded:
         response += f"\n🎉 {member.mention} has been upgraded to **{active_role.name}**!"
         announce_channel = bot.get_channel(config.ANNOUNCEMENTS_CHANNEL_ID)
         if announce_channel:
-            try:
-                await announce_channel.send(
-                    f"🎉 Congrats {member.mention} — you've been promoted to **{active_role.name}** "
-                    f"for attending {new_count} CSIA events!"
-                )
-            except discord.HTTPException as e:
-                print(f"Failed to send announcement: {e}")
+            await announce_channel.send(
+                f"🎉 Congrats {member.mention} — you've been promoted to **{active_role.name}** "
+                f"for attending {new_count} CSIA events!"
+            )
 
     await interaction.response.send_message(response, ephemeral=True)
 
@@ -341,38 +340,15 @@ async def myevents(interaction: discord.Interaction):
         await interaction.response.send_message("You haven't been marked present at any events yet.", ephemeral=True)
         return
 
-    lines = []
-    for e in history:
-        event_name = e.get("event", "Event")
-        ts = e.get("timestamp")
-        date_str = ""
-        if ts:
-            try:
-                from datetime import datetime
-                dt = datetime.fromisoformat(ts)
-                date_str = f" (<t:{int(dt.timestamp())}:d>)"
-            except Exception:
-                pass
-        lines.append(f"• **{event_name}**{date_str}")
-
+    lines = [f"• {e['event']}" for e in history]
     remaining = max(0, config.ATTENDANCE_THRESHOLD - len(history))
-    header = f"**Your CSIA Attendance ({len(history)} event(s)):**\n"
-    footer = (
-        f"\n\nAttend {remaining} more event(s) to be upgraded to Active Member!"
-        if remaining > 0
-        else "\n\n🎉 You've reached the Active Member threshold!"
+    text = (
+        f"**Your CSIA Attendance ({len(history)} event(s)):**\n" + "\n".join(lines)
     )
+    if remaining > 0:
+        text += f"\n\nAttend {remaining} more event(s) to be upgraded to Active Member!"
 
-    body = "\n".join(lines)
-    full_text = header + body + footer
-
-    # Guard against Discord's 2000-character message limit
-    if len(full_text) > 2000:
-        truncated_lines = lines[:25]
-        body = "\n".join(truncated_lines) + f"\n...and {len(lines) - 25} more"
-        full_text = header + body + footer
-
-    await interaction.response.send_message(full_text, ephemeral=True)
+    await interaction.response.send_message(text, ephemeral=True)
 
 
 
@@ -445,15 +421,69 @@ async def viewregistration(interaction: discord.Interaction, member: discord.Mem
         f"Personal Email: {reg['personal_email']}\n"
         f"HAU Student Email: {reg['hau_email'] or '(not provided)'}\n"
         f"Linux Fundamentals Attendee: {'Yes' if reg['is_linux_attendee'] else 'No'}\n"
+        f"CSIA Member (opted in): {'Yes' if reg.get('wants_membership', False) else 'No'}\n"
         f"Submitted: {reg['submitted_at']}"
     )
     await interaction.response.send_message(text, ephemeral=True)
 
 
-@bot.tree.command(name="exportregistrations", description="Export all welcome-channel registrations as a CSV (officers only)")
-async def exportregistrations(interaction: discord.Interaction):
+@bot.tree.command(name="editregistration", description="Fix a single field on a member's registration (officers only)")
+@app_commands.describe(
+    member="The member whose registration to edit",
+    field="Which field to change",
+    new_value="The corrected value (for Yes/No fields, type Yes or No)",
+)
+@app_commands.choices(field=[
+    app_commands.Choice(name="Full Name", value="full_name"),
+    app_commands.Choice(name="Personal Email", value="personal_email"),
+    app_commands.Choice(name="HAU Student Email", value="hau_email"),
+    app_commands.Choice(name="Linux Fundamentals Attendee (Yes/No)", value="is_linux_attendee"),
+    app_commands.Choice(name="CSIA Member opted in (Yes/No)", value="wants_membership"),
+])
+async def editregistration(
+    interaction: discord.Interaction,
+    member: discord.Member,
+    field: app_commands.Choice[str],
+    new_value: str,
+):
     if not is_officer(interaction.user):
         await interaction.response.send_message("Only officers can use this command.", ephemeral=True)
+        return
+
+    existing = registration_store.get_registration(member.id)
+    if existing is None:
+        await interaction.response.send_message(
+            f"{member.display_name} doesn't have a registration to edit yet.", ephemeral=True
+        )
+        return
+
+    field_key = field.value
+    clean_value: object = new_value.strip()
+
+    if field_key in ("is_linux_attendee", "wants_membership"):
+        clean_value = new_value.strip().lower() in ("yes", "y", "yep", "yeah", "true")
+    elif field_key in ("personal_email", "hau_email"):
+        if clean_value and not welcome_events.is_valid_email(str(clean_value)):
+            await interaction.response.send_message(
+                "That doesn't look like a valid email — nothing was changed.", ephemeral=True
+            )
+            return
+
+    registration_store.update_registration_field(member.id, field_key, clean_value)
+
+    await interaction.response.send_message(
+        f"Updated **{field.name}** for {member.display_name} to: `{clean_value}`", ephemeral=True
+    )
+
+
+@bot.tree.command(name="exportregistrations", description="Export all welcome-channel registrations as a CSV (restricted officers only)")
+async def exportregistrations(interaction: discord.Interaction):
+    if not is_exporter(interaction.user):
+        await interaction.response.send_message(
+            "You don't have permission to export registrations. This is restricted "
+            "separately from general officer commands since it includes personal data.",
+            ephemeral=True,
+        )
         return
 
     data = registration_store.get_all_registrations()
@@ -465,7 +495,7 @@ async def exportregistrations(interaction: discord.Interaction):
     writer = csv.writer(buffer)
     writer.writerow([
         "Discord User ID", "Discord Username", "Full Name", "Personal Email",
-        "HAU Student Email", "Linux Fundamentals Attendee", "Submitted At",
+        "HAU Student Email", "Linux Fundamentals Attendee", "CSIA Member (opted in)", "Submitted At",
     ])
 
     for user_id_str, reg in data.items():
@@ -478,6 +508,7 @@ async def exportregistrations(interaction: discord.Interaction):
             reg["personal_email"],
             reg["hau_email"] or "",
             "Yes" if reg["is_linux_attendee"] else "No",
+            "Yes" if reg.get("wants_membership", False) else "No",
             reg["submitted_at"],
         ])
 
@@ -493,8 +524,5 @@ async def exportregistrations(interaction: discord.Interaction):
 
 if __name__ == "__main__":
     if not TOKEN:
-        raise RuntimeError(
-            "DISCORD_BOT_TOKEN (or DISCORD_TOKEN) not found. "
-            "Did you create a .env file from .env.example?"
-        )
+        raise RuntimeError("DISCORD_BOT_TOKEN not found. Did you create a .env file from .env.example?")
     bot.run(TOKEN)

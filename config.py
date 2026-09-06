@@ -123,6 +123,15 @@ OFFICER_ROLE_IDS = [
     1544650616863989820,  # Admin (real server)
 ]
 
+# Role(s) allowed to run /exportregistrations — a stricter subset of officers,
+# since this exports real names + personal emails as a downloadable file.
+# Defaults to the same as OFFICER_ROLE_IDS below if left empty, so nothing
+# breaks if you don't touch this — but you can narrow it (e.g. Secretary only)
+# without any code changes.
+EXPORT_ROLE_IDS: list[int] = [
+    1544650616863989820,  # Admin (real server) — narrow this to just Secretary if desired
+]
+
 # ── Announcements ───────────────────────────────────────
 ANNOUNCEMENTS_CHANNEL_ID = 1541803426139082833  # #announcements
 

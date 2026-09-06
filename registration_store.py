@@ -25,13 +25,15 @@ def _save(data):
 
 
 def save_registration(user_id: int, full_name: str, personal_email: str,
-                       hau_email: str, is_linux_attendee: bool) -> None:
+                       hau_email: str, is_linux_attendee: bool,
+                       wants_membership: bool = False) -> None:
     data = _load()
     data[str(user_id)] = {
         "full_name": full_name,
         "personal_email": personal_email,
         "hau_email": hau_email,
         "is_linux_attendee": is_linux_attendee,
+        "wants_membership": wants_membership,
         "submitted_at": datetime.now(timezone.utc).isoformat(),
     }
     _save(data)
@@ -49,3 +51,18 @@ def has_registered(user_id: int) -> bool:
 def get_all_registrations() -> dict:
     """Officer/export use — returns the full {user_id: registration} dict."""
     return _load()
+
+
+def update_registration_field(user_id: int, field: str, value) -> bool:
+    """
+    Updates a single field on an existing registration. Returns True if the
+    user had a registration to update, False otherwise (nothing is created —
+    use save_registration() for that).
+    """
+    data = _load()
+    uid = str(user_id)
+    if uid not in data:
+        return False
+    data[uid][field] = value
+    _save(data)
+    return True
