@@ -15,7 +15,7 @@ to update here.
 """
 
 import io
-import os
+import urllib.request
 import discord
 from PIL import Image, ImageDraw, ImageFont
 import aiohttp
@@ -34,17 +34,32 @@ TEXT_COLOR = (245, 245, 245)
 SUBTEXT_COLOR = (165, 165, 175)
 BAR_BG_COLOR = (38, 38, 44)
 
+GITHUB_FONT_BASE = "https://raw.githubusercontent.com/Aynlie/CSIA-Bot/main/assets/fonts/"
+_FONT_CACHE: dict[str, bytes] = {}
 
-FONTS_DIR = os.path.join(os.path.dirname(__file__), "assets", "fonts")
-FONT_BOLD_PATH = os.path.join(FONTS_DIR, "Inter-Bold.ttf")
-FONT_REGULAR_PATH = os.path.join(FONTS_DIR, "Inter-Regular.ttf")
+
+def _get_font_bytes(filename: str) -> bytes | None:
+    """Fetches font bytes directly from GitHub, caching in memory."""
+    if filename in _FONT_CACHE:
+        return _FONT_CACHE[filename]
+
+    try:
+        url = GITHUB_FONT_BASE + filename
+        req = urllib.request.Request(url, headers={"User-Agent": "CSIA-Bot"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = resp.read()
+            _FONT_CACHE[filename] = data
+            return data
+    except Exception:
+        return None
 
 
 def _load_font(size: int, bold: bool = False):
-    bundled_path = FONT_BOLD_PATH if bold else FONT_REGULAR_PATH
-    if os.path.exists(bundled_path):
+    filename = "Inter-Bold.ttf" if bold else "Inter-Regular.ttf"
+    font_bytes = _get_font_bytes(filename)
+    if font_bytes:
         try:
-            return ImageFont.truetype(bundled_path, size)
+            return ImageFont.truetype(io.BytesIO(font_bytes), size)
         except OSError:
             pass
 
