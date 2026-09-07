@@ -6,6 +6,7 @@ Features:
 2. /markattendance — officers mark a member present at an event
 3. Auto-upgrade a member to "Active Member" once they hit the attendance threshold
 4. /myevents — members check their own attendance history
+5. Native support tickets (/postticketpanel, /closeticket) — replaces Carl-bot
 
 SETUP:
 1. pip install -r requirements.txt
@@ -30,6 +31,8 @@ import profile_card
 import welcome_events
 import registration_store
 import bot_state
+import ticket_store
+import ticket_system
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -40,6 +43,27 @@ intents.message_content = True
 intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    """
+    Catch-all for slash command errors that aren't already handled inside
+    the command itself. Without this, an unhandled exception (a bad
+    permission, a Discord API hiccup, etc.) just leaves the user staring
+    at "The application did not respond" with no explanation and nothing
+    in the logs pointing at why.
+    """
+    print(f"Slash command error in /{interaction.command.name if interaction.command else '?'}: {error}")
+
+    message = "Something went wrong running that command. Please try again, or ping an officer."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except discord.HTTPException:
+        pass  # interaction likely already expired — nothing more we can do
 
 
 def is_officer(member: discord.Member) -> bool:
@@ -87,6 +111,11 @@ async def on_ready():
     # across restarts (needed because RegisterView uses timeout=None + a
     # fixed custom_id).
     bot.add_view(welcome_events.RegisterView())
+
+    # Same deal for the ticket system's two persistent buttons — the panel's
+    # "Open a Ticket" and every open ticket channel's "Close Ticket".
+    bot.add_view(ticket_system.TicketPanelView())
+    bot.add_view(ticket_system.TicketCloseView())
 
     # Reload the verification message ID so the reaction gate keeps working
     # after a restart — this used to live only in memory and reset to None
@@ -373,9 +402,15 @@ async def postwelcome(interaction: discord.Interaction):
 # PROFILE CARD
 # ─────────────────────────────────────────────────────────
 
-@bot.tree.command(name="profile", description="View your CSIA profile card")
+@bot.tree.command(name="profile", description="View your CSIA profile card (Members only)")
 @app_commands.describe(member="Whose profile to view (defaults to yourself)")
 async def profile(interaction: discord.Interaction, member: discord.Member = None):
+    if not is_member(interaction.user):
+        await interaction.response.send_message(
+            "This command is for official CSIA Members only.", ephemeral=True
+        )
+        return
+
     target = member or interaction.user
     await interaction.response.defer()
     file = await profile_card.build_profile_card(target)
@@ -509,6 +544,74 @@ async def verifymember(
     announce_channel = bot.get_channel(config.ANNOUNCEMENTS_CHANNEL_ID)
     if announce_channel:
         await announce_channel.send(f"🎉 Welcome {member.mention} as an official CSIA Member! 🦊")
+
+
+# ─────────────────────────────────────────────────────────
+# SUPPORT TICKETS
+# ─────────────────────────────────────────────────────────
+
+@bot.tree.command(
+    name="postticketpanel",
+    description="Post the 'Open a Ticket' panel (officers only)",
+)
+async def postticketpanel(interaction: discord.Interaction):
+    if not is_officer(interaction.user):
+        await interaction.response.send_message("Only officers can use this command.", ephemeral=True)
+        return
+
+    channel = bot.get_channel(config.TICKET_PANEL_CHANNEL_ID)
+    if channel is None:
+        await interaction.response.send_message(
+            "TICKET_PANEL_CHANNEL_ID isn't set correctly in config.py.", ephemeral=True
+        )
+        return
+
+    category = interaction.guild.get_channel(config.TICKET_CATEGORY_ID)
+    if category is None or not isinstance(category, discord.CategoryChannel):
+        await interaction.response.send_message(
+            "TICKET_CATEGORY_ID isn't set correctly in config.py — fix that before "
+            "posting the panel, or tickets will fail to open for everyone.",
+            ephemeral=True,
+        )
+        return
+
+    staff_roles = [interaction.guild.get_role(rid) for rid in ticket_system.staff_role_ids()]
+    if not any(staff_roles):
+        await interaction.response.send_message(
+            "Neither TICKET_STAFF_ROLE_IDS nor OFFICER_ROLE_IDS resolves to a real role "
+            "in this server — fix that first, or tickets will be visible only to the "
+            "member who opened them and nobody from CSIA.",
+            ephemeral=True,
+        )
+        return
+
+    await channel.send(
+        embed=ticket_system.build_ticket_panel_embed(), view=ticket_system.TicketPanelView()
+    )
+    await interaction.response.send_message(f"Posted the ticket panel in {channel.mention}.", ephemeral=True)
+
+
+@bot.tree.command(
+    name="closeticket",
+    description="Close the current ticket channel (run inside the ticket — opener or staff only)",
+)
+async def closeticket(interaction: discord.Interaction):
+    ticket = ticket_store.get_ticket(interaction.channel.id)
+    if ticket is None:
+        await interaction.response.send_message(
+            "This doesn't look like an active ticket channel.", ephemeral=True
+        )
+        return
+
+    is_opener = interaction.user.id == ticket["opener_id"]
+    if not (is_opener or ticket_system.is_ticket_staff(interaction.user)):
+        await interaction.response.send_message(
+            "Only the person who opened this ticket or CSIA staff can close it.", ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message("Closing this ticket...", ephemeral=True)
+    await ticket_system.close_ticket_channel(interaction.channel, interaction.user)
 
 
 @bot.tree.command(name="exportregistrations", description="Export all welcome-channel registrations as a CSV (restricted officers only)")

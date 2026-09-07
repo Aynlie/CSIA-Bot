@@ -232,3 +232,36 @@ MEMBERSHIP_FORM_URL = "https://forms.gle/REPLACE_WITH_REAL_LINK"  # TODO: paste 
 # exposed as its own named constant so welcome_events.py can reference it
 # without digging through the ROLE_MENUS list.
 LINUX_FUNDAMENTALS_ATTENDEE_ROLE_ID = 1545381398313963660
+
+# ── Support Tickets ──────────────────────────────────────
+# Native ticket system (ticket_store.py / ticket_system.py) — replaces
+# Carl-bot's ticket feature so CSIA doesn't need a second bot just for
+# this. See Handoff.md for the full setup + flow writeup.
+
+# Category new ticket channels get created under. Create a category
+# (e.g. "Tickets") and give it NO default permissions so it starts fully
+# private — the bot adds per-ticket overwrites on top of that.
+TICKET_CATEGORY_ID = 1546182470129553529  # TODO: fill in a dedicated ticket category ID
+
+# Channel where the "Open a Ticket" panel gets posted, e.g. #support.
+TICKET_PANEL_CHANNEL_ID = 1546176650977476799  # TODO: fill in
+
+# Role(s) that can see every ticket channel and close tickets that
+# aren't theirs. Left empty, this falls back to OFFICER_ROLE_IDS above —
+# same pattern as EXPORT_ROLE_IDS — so tickets work with zero extra
+# config, but you can narrow this to a "Support" role if you want ticket
+# access to be broader (or narrower) than full officer access.
+TICKET_STAFF_ROLE_IDS: list[int] = []
+
+# Optional: channel that gets a summary embed every time a ticket closes.
+# The ticket channel itself is deleted on close, so this is the only
+# record left afterward. Leave as 0 to skip logging entirely.
+TICKET_LOG_CHANNEL_ID = 1546180604918243428  # TODO: fill in, or leave as 0
+
+TICKET_PANEL_TITLE = "🛟 CSIA Support"
+TICKET_PANEL_DESCRIPTION = (
+    "Need help, have a question, or ran into an issue? Click the button "
+    "below to open a private ticket with CSIA staff.\n\n"
+    "Please don't open multiple tickets for the same issue — one ticket "
+    "at a time, and an officer will get to you."
+)

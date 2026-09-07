@@ -1,7 +1,10 @@
 .env
-registrations.json
-attendance.json
 __pycache__/
 *.pyc
-registrations.json
+
+# Runtime data files — differ per environment, may contain real member
+# data once live, never committed. See Handoff.md Section 6/7.
 attendance.json
+registrations.json
+tickets.json
+bot_state.json

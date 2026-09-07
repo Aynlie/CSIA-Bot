@@ -50,6 +50,16 @@ def registration_store(tmp_path, monkeypatch):
     return mod
 
 
+@pytest.fixture
+def ticket_store(tmp_path, monkeypatch):
+    """Fresh ticket_store module pointed at a throwaway temp file."""
+    import ticket_store as mod
+    importlib.reload(mod)
+    temp_file = tmp_path / "tickets_test.json"
+    monkeypatch.setattr(mod, "DATA_FILE", str(temp_file))
+    return mod
+
+
 # ── attendance_store ────────────────────────────────────────────────
 
 def test_record_attendance_first_time_is_new(attendance_store):
@@ -150,3 +160,48 @@ def test_email_regex_rejects_not_at_real(registration_store):
     import welcome_events
     assert welcome_events.is_valid_email("not@real") is False
     assert welcome_events.is_valid_email("santosjaymee13@gmail.com") is True
+
+
+# ── ticket_store ─────────────────────────────────────────────────────
+
+def test_create_ticket_assigns_incrementing_numbers(ticket_store):
+    first = ticket_store.create_ticket(111, 1)
+    second = ticket_store.create_ticket(222, 2)
+    assert first == 1
+    assert second == 2
+
+
+def test_get_open_ticket_channel_id_finds_opener(ticket_store):
+    ticket_store.create_ticket(111, 42)
+    assert ticket_store.get_open_ticket_channel_id(42) == 111
+
+
+def test_get_open_ticket_channel_id_none_when_no_open_ticket(ticket_store):
+    assert ticket_store.get_open_ticket_channel_id(999) is None
+
+
+def test_close_ticket_removes_record_and_frees_opener(ticket_store):
+    ticket_store.create_ticket(111, 42)
+    closed = ticket_store.close_ticket(111)
+    assert closed["opener_id"] == 42
+    assert ticket_store.get_ticket(111) is None
+    assert ticket_store.get_open_ticket_channel_id(42) is None
+
+
+def test_close_ticket_unknown_channel_returns_none(ticket_store):
+    assert ticket_store.close_ticket(999) is None
+
+
+def test_get_all_open_tickets_returns_everyone(ticket_store):
+    ticket_store.create_ticket(111, 1)
+    ticket_store.create_ticket(222, 2)
+    open_tickets = ticket_store.get_all_open_tickets()
+    assert len(open_tickets) == 2
+    assert "111" in open_tickets and "222" in open_tickets
+
+
+def test_corrupted_json_file_does_not_crash(ticket_store):
+    with open(ticket_store.DATA_FILE, "w") as f:
+        f.write("{not valid json!!!")
+    # _load() should recover gracefully instead of raising
+    assert ticket_store.get_open_ticket_channel_id(1) is None
