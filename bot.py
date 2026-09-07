@@ -90,6 +90,19 @@ def is_member(member: discord.Member) -> bool:
     return config.MEMBER_ROLE_ID in member_role_ids
 
 
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    print(f"Error in command '{interaction.command.name if interaction.command else 'unknown'}': {error}")
+    err_message = "An error occurred while running this command. Please try again or check bot logs."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(err_message, ephemeral=True)
+        else:
+            await interaction.response.send_message(err_message, ephemeral=True)
+    except Exception as e:
+        print(f"Failed to send error message to interaction: {e}")
+
+
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
